@@ -179,3 +179,12 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Ignore Data Files
+data/
+*.csv
+*.zip
+*.xlsx
+
+# macOS
+.DS_Store
