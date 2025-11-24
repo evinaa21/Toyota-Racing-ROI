@@ -12,9 +12,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
 import sys
-
-# Add src directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+import os
 
 # Import analysis functions
 from roi_engine import (
@@ -279,6 +277,19 @@ def validate_csv_format(df):
 def load_race_data(filepath, is_uploaded=False):
     """Load and process race data with caching"""
     try:
+        # SMART LOADING: Check for .zip if .csv is missing OR if .csv is too small (truncated)
+        # This fixes the GitHub 100MB limit issue where we might have a pointer file or truncated file
+        if not is_uploaded:
+            zip_filepath = filepath + ".zip"
+            # Check if zip exists
+            if os.path.exists(zip_filepath):
+                print(f"📂 Found compressed data: {zip_filepath}. Using it instead of CSV.")
+                filepath = zip_filepath
+            # If zip doesn't exist, but CSV does, check if it's suspiciously small (LFS pointer or truncated)
+            elif os.path.exists(filepath) and os.path.getsize(filepath) < 50000: # 50KB
+                 print(f"⚠️ CSV file is very small ({os.path.getsize(filepath)} bytes). It might be truncated.")
+                 # We can't do much if zip is missing, but at least we warned.
+
         # Load raw data first
         df_raw = pd.read_csv(filepath, low_memory=False)
         
