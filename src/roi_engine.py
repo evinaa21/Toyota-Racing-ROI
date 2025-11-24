@@ -14,15 +14,9 @@ Date: 2025-11-22
 
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import os
-from scipy import interpolate
 from scipy.signal import savgol_filter
-from scipy.interpolate import interp1d
 from sklearn.linear_model import LinearRegression
-import warnings
-warnings.filterwarnings('ignore')
+import os
 
 # Set style
 sns.set_style("darkgrid")
@@ -31,31 +25,63 @@ plt.rcParams['figure.figsize'] = (16, 10)
 def load_and_pivot_telemetry(filepath):
     """
     Load telemetry data and pivot from long to wide format.
-    
-    Parameters:
-    -----------
-    filepath : str
-        Path to telemetry CSV file
-    
-    Returns:
-    --------
-    pd.DataFrame
-        Pivoted telemetry data
+    Handles both local files and Google Drive URLs.
     """
     print("="*70)
     print("RACING ROI ENGINE - LOADING DATA")
     print("="*70)
     
-    # DATA SOURCE VERIFICATION
-    abs_path = os.path.abspath(filepath)
-    print(f"📂 LOADING DATA FROM: {abs_path}")
+    # --- GOOGLE DRIVE FIX ---
+    if 'drive.google.com' in filepath:
+        import gdown
+        import tempfile
+        
+        print(f"📂 Downloading from Google Drive...")
+        
+        # Extract file ID from URL
+        if 'id=' in filepath:
+            file_id = filepath.split('id=')[1].split('&')[0]
+        else:
+            file_id = filepath.split('/d/')[1].split('/')[0]
+        
+        # Download to temp file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.csv')
+        download_url = f'https://drive.google.com/uc?id={file_id}'
+        
+        try:
+            gdown.download(download_url, temp_file.name, quiet=False)
+            filepath = temp_file.name
+            print(f"✅ Downloaded to: {filepath}")
+        except Exception as e:
+            print(f"❌ Google Drive download failed: {e}")
+            raise ValueError(
+                "Failed to download from Google Drive. "
+                "Make sure the file is set to 'Anyone with the link can view'."
+            )
+    else:
+        abs_path = os.path.abspath(filepath)
+        print(f"📂 LOADING DATA FROM: {abs_path}")
     
-    if "data" not in abs_path.lower():
-        print("⚠️ WARNING: You are not loading from the standard 'data/' folder. Please check your path.")
-    
+    # Load CSV
     df_long = pd.read_csv(filepath, low_memory=False)
     print(f"Loaded {len(df_long):,} rows")
     
+    # Check if data is already in wide format
+    required_wide_cols = ['speed', 'accx_can', 'accy_can', 'lap', 'vehicle_id']
+    
+    if all(col in df_long.columns for col in required_wide_cols):
+        print("⚠️ Data is already in WIDE format. Skipping pivot.")
+        return df_long
+    
+    # Validate long format
+    if 'telemetry_name' not in df_long.columns or 'telemetry_value' not in df_long.columns:
+        raise ValueError(
+            f"❌ CSV format not recognized!\n"
+            f"Expected: ['telemetry_name', 'telemetry_value'] OR {required_wide_cols}\n"
+            f"Found: {df_long.columns.tolist()}"
+        )
+    
+    # Pivot to wide format
     print("Pivoting to wide format...")
     df_wide = df_long.pivot_table(
         index=['timestamp', 'vehicle_id', 'vehicle_number', 'lap', 'outing'],
