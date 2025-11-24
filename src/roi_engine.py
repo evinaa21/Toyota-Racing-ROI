@@ -31,6 +31,7 @@ def load_and_pivot_telemetry(filepath):
     """
     Load telemetry data and pivot from long to wide format.
     Handles both local files and Google Drive URLs.
+    OPTIMIZED FOR MEMORY USAGE.
     """
     print("="*70)
     print("RACING ROI ENGINE - LOADING DATA")
@@ -67,10 +68,39 @@ def load_and_pivot_telemetry(filepath):
         abs_path = os.path.abspath(filepath)
         print(f"📂 LOADING DATA FROM: {abs_path}")
     
-    # Load CSV
-    df_long = pd.read_csv(filepath, low_memory=False)
+    # --- MEMORY OPTIMIZATION: Read only required columns ---
+    # We only need these columns for the analysis
+    usecols = ['timestamp', 'vehicle_id', 'vehicle_number', 'lap', 'outing', 'telemetry_name', 'telemetry_value']
+    
+    # Check if file is huge (>500MB)
+    file_size = os.path.getsize(filepath)
+    is_huge = file_size > 500 * 1024 * 1024  # 500MB
+    
+    print(f"File size: {file_size / 1024 / 1024:.2f} MB")
+    
+    if is_huge:
+        print("⚠️ LARGE FILE DETECTED: Enabling memory optimizations...")
+    
+    # Load CSV with optimizations
+    try:
+        # Try loading with specific columns first
+        df_long = pd.read_csv(
+            filepath, 
+            low_memory=False,
+            usecols=lambda c: c in usecols or c in ['speed', 'accx_can', 'accy_can'] # Handle wide format too
+        )
+    except ValueError:
+        # Fallback if columns don't match (e.g. wide format)
+        df_long = pd.read_csv(filepath, low_memory=False)
+
     print(f"Loaded {len(df_long):,} rows")
     
+    # --- MEMORY OPTIMIZATION: Downcast types ---
+    for col in df_long.select_dtypes(include=['float64']).columns:
+        df_long[col] = df_long[col].astype('float32')
+    for col in df_long.select_dtypes(include=['int64']).columns:
+        df_long[col] = df_long[col].astype('int32')
+        
     # Check if data is already in wide format
     required_wide_cols = ['speed', 'accx_can', 'accy_can', 'lap', 'vehicle_id']
     
@@ -86,6 +116,12 @@ def load_and_pivot_telemetry(filepath):
             f"Found: {df_long.columns.tolist()}"
         )
     
+    # --- MEMORY OPTIMIZATION: Filter before pivoting ---
+    # Only keep the telemetry channels we actually need
+    needed_channels = ['speed', 'accx_can', 'accy_can', 'Steering_Angle', 'Brake_Pressure', 'Throttle_Position']
+    df_long = df_long[df_long['telemetry_name'].isin(needed_channels)]
+    print(f"Filtered to relevant channels: {len(df_long):,} rows")
+
     # Pivot to wide format
     print("Pivoting to wide format...")
     df_wide = df_long.pivot_table(
