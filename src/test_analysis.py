@@ -50,7 +50,7 @@ class TestSuite:
         self.passed = 0
         self.failed = 0
         self.tests_run = 0
-        self.filepath = r'data\Sonoma\Race 1\sonoma.csv'
+        self.filepath = 'data/Sonoma/Race 1/sonoma.csv'
         
     def assert_equal(self, actual, expected, test_name, tolerance=None):
         """Custom assertion with detailed output"""
@@ -955,8 +955,8 @@ def main():
     suite = TestSuite()
     
     # Define race data files
-    race1_filepath = r'data\Sonoma\Race 1\sonoma.csv'
-    race2_filepath = r'data\Sonoma\Race 2\sonoma_telemetry_R2.csv'
+    race1_filepath = 'data/Sonoma/Race 1/sonoma.csv'
+    race2_filepath = 'data/Sonoma/Race 2/sonoma_telemetry_R2.csv'
     
     # Run tests for Race 1
     race1_results = run_tests_for_race(suite, "Race 1", race1_filepath)

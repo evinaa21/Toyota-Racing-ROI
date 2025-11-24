@@ -502,7 +502,7 @@ def main():
     if data_source == "Pre-loaded Race Data":
         # Race Selection
         race_options = {
-            "Race 1 - Sonoma (Balanced)": r'data\Sonoma\Race 1\sonoma.csv',
+            "Race 1 - Sonoma (Balanced)": 'data/Sonoma/Race 1/sonoma.csv',
            
         }
         

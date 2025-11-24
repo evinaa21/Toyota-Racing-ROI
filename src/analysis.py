@@ -374,7 +374,7 @@ def main():
     print("="*60)
     
     # Define file path - UPDATE THIS PATH TO YOUR CSV FILE
-    filepath = r'data\Sonoma\Race 1\sonoma.csv'
+    filepath = 'data/Sonoma/Race 1/sonoma.csv'
     
     try:
         # Step 1: Load data

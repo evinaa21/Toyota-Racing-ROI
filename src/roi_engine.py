@@ -667,7 +667,7 @@ def main():
     print("="*70 + "\n")
     
     # Load data
-    filepath = r'data\Sonoma\Race 1\sonoma.csv'
+    filepath = 'data/Sonoma/Race 1/sonoma.csv'
     df = load_and_pivot_telemetry(filepath)
     
     # Clean data
