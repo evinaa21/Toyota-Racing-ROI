@@ -523,8 +523,7 @@ def main():
     if data_source == "Pre-loaded Race Data":
         # Race Selection
         race_options = {
-            "Race 1 - Sonoma (Balanced)": 'data/Sonoma/Race 1/sonoma.csv',
-           
+            "Race 1 - Sonoma (Balanced)": 'https://drive.google.com/uc?export=download&id=1U9DDymUgAlwl1YKZVKU5mQYBOpTEPCHR',
         }
         
         selected_race = st.sidebar.selectbox("SELECT RACE DATA", list(race_options.keys()))
