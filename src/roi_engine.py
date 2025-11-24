@@ -68,7 +68,7 @@ def load_and_pivot_telemetry(filepath):
         abs_path = os.path.abspath(filepath)
         print(f"📂 LOADING DATA FROM: {abs_path}")
     
-    # --- MEMORY OPTIMIZATION: Read only required columns ---
+    # --- MEMORY OPTIMIZATION: Read in CHUNKS ---
     # We only need these columns for the analysis
     usecols = ['timestamp', 'vehicle_id', 'vehicle_number', 'lap', 'outing', 'telemetry_name', 'telemetry_value']
     
@@ -79,28 +79,57 @@ def load_and_pivot_telemetry(filepath):
     print(f"File size: {file_size / 1024 / 1024:.2f} MB")
     
     if is_huge:
-        print("⚠️ LARGE FILE DETECTED: Enabling memory optimizations...")
+        print("⚠️ LARGE FILE DETECTED: Enabling chunked loading & sampling...")
     
-    # Load CSV with optimizations
+    # Define needed channels to filter EARLY
+    needed_channels = ['speed', 'accx_can', 'accy_can', 'Steering_Angle', 'Brake_Pressure', 'Throttle_Position']
+    
+    chunks = []
+    chunk_size = 100000  # Process 100k rows at a time
+    
     try:
-        # Try loading with specific columns first
-        df_long = pd.read_csv(
+        # Create a reader object (iterator) instead of reading all at once
+        with pd.read_csv(
             filepath, 
-            low_memory=False,
-            usecols=lambda c: c in usecols or c in ['speed', 'accx_can', 'accy_can'] # Handle wide format too
-        )
-    except ValueError:
-        # Fallback if columns don't match (e.g. wide format)
+            usecols=lambda c: c in usecols or c in ['speed', 'accx_can', 'accy_can'],
+            chunksize=chunk_size,
+            low_memory=False
+        ) as reader:
+            
+            for i, chunk in enumerate(reader):
+                # 1. Filter rows immediately (if long format)
+                if 'telemetry_name' in chunk.columns:
+                    chunk = chunk[chunk['telemetry_name'].isin(needed_channels)]
+                
+                # 2. Downcast types immediately
+                for col in chunk.select_dtypes(include=['float64']).columns:
+                    chunk[col] = chunk[col].astype('float32')
+                for col in chunk.select_dtypes(include=['int64']).columns:
+                    chunk[col] = chunk[col].astype('int32')
+
+                # 3. Sampling (Optional): If file is huge, take every 2nd row to save space
+                # This reduces data size by 50% with minimal visual impact
+                if is_huge:
+                    chunk = chunk.iloc[::2, :]
+
+                chunks.append(chunk)
+                
+                if i % 10 == 0:
+                    print(f"Processed chunk {i}...")
+
+        # Combine all processed chunks
+        if not chunks:
+            raise ValueError("No data found in file!")
+            
+        df_long = pd.concat(chunks, ignore_index=True)
+        print(f"Final loaded size: {len(df_long):,} rows")
+
+    except ValueError as e:
+        # Fallback for wide format or other errors
+        print(f"Chunking failed or format mismatch: {e}. Trying standard load...")
         df_long = pd.read_csv(filepath, low_memory=False)
 
-    print(f"Loaded {len(df_long):,} rows")
     
-    # --- MEMORY OPTIMIZATION: Downcast types ---
-    for col in df_long.select_dtypes(include=['float64']).columns:
-        df_long[col] = df_long[col].astype('float32')
-    for col in df_long.select_dtypes(include=['int64']).columns:
-        df_long[col] = df_long[col].astype('int32')
-        
     # Check if data is already in wide format
     required_wide_cols = ['speed', 'accx_can', 'accy_can', 'lap', 'vehicle_id']
     
@@ -116,12 +145,6 @@ def load_and_pivot_telemetry(filepath):
             f"Found: {df_long.columns.tolist()}"
         )
     
-    # --- MEMORY OPTIMIZATION: Filter before pivoting ---
-    # Only keep the telemetry channels we actually need
-    needed_channels = ['speed', 'accx_can', 'accy_can', 'Steering_Angle', 'Brake_Pressure', 'Throttle_Position']
-    df_long = df_long[df_long['telemetry_name'].isin(needed_channels)]
-    print(f"Filtered to relevant channels: {len(df_long):,} rows")
-
     # Pivot to wide format
     print("Pivoting to wide format...")
     df_wide = df_long.pivot_table(
