@@ -18,6 +18,11 @@ from scipy.signal import savgol_filter
 from sklearn.linear_model import LinearRegression
 import os
 
+# --- FIX: ADD MISSING IMPORTS ---
+import seaborn as sns
+import matplotlib.pyplot as plt
+from scipy.interpolate import interp1d
+
 # Set style
 sns.set_style("darkgrid")
 plt.rcParams['figure.figsize'] = (16, 10)
