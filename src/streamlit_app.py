@@ -280,11 +280,18 @@ def load_race_data(filepath, is_uploaded=False):
         # SMART LOADING: Check for .zip if .csv is missing OR if .csv is too small (truncated)
         # This fixes the GitHub 100MB limit issue where we might have a pointer file or truncated file
         if not is_uploaded:
-            zip_filepath = filepath + ".zip"
-            # Check if zip exists
-            if os.path.exists(zip_filepath):
-                print(f"📂 Found compressed data: {zip_filepath}. Using it instead of CSV.")
-                filepath = zip_filepath
+            # Check for .csv.zip (e.g. sonoma.csv.zip)
+            zip_filepath_1 = filepath + ".zip"
+            # Check for .zip replacing .csv (e.g. sonoma.zip)
+            zip_filepath_2 = filepath.replace('.csv', '.zip')
+            
+            if os.path.exists(zip_filepath_1):
+                print(f"📂 Found compressed data: {zip_filepath_1}")
+                filepath = zip_filepath_1
+            elif os.path.exists(zip_filepath_2):
+                print(f"📂 Found compressed data: {zip_filepath_2}")
+                filepath = zip_filepath_2
+            
             # If zip doesn't exist, but CSV does, check if it's suspiciously small (LFS pointer or truncated)
             elif os.path.exists(filepath) and os.path.getsize(filepath) < 50000: # 50KB
                  print(f"⚠️ CSV file is very small ({os.path.getsize(filepath)} bytes). It might be truncated.")
