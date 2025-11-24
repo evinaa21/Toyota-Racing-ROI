@@ -102,6 +102,9 @@ def clean_telemetry(df):
     df = df[df['speed'] >= 10].copy()
     print(f"After speed filter: {len(df):,} rows")
     
+    if df.empty:
+        raise ValueError("No data points with speed >= 10 km/h found. The dataset might be empty or contain only pit/stationary data.")
+    
     # Filter: Valid acceleration data
     df = df[
         (df['accx_can'].notna()) & 
@@ -249,6 +252,9 @@ def calculate_tire_stress(df):
         
         resampled_laps.append(lap_df)
         
+    if not resampled_laps:
+        raise ValueError("No valid laps found in the data. Please check if the dataset contains complete laps with speed > 10.")
+
     df_resampled = pd.concat(resampled_laps, ignore_index=True)
     
     print(f"Processed {len(df_resampled):,} resampled data points")

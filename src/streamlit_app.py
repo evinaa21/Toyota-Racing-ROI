@@ -331,6 +331,9 @@ def load_race_data(filepath, is_uploaded=False):
             'raw_df': df
         }
     except Exception as e:
+        st.error(f"Detailed Error: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
         return None
 
 # ==========================================
