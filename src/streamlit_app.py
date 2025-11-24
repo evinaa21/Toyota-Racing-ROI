@@ -502,8 +502,8 @@ def main():
     if data_source == "Pre-loaded Race Data":
         # Race Selection
         race_options = {
-            "Race 1 - Sonoma (Balanced)": r'data\Sonoma\Race 1\sonoma_telemetry_R1.csv',
-            "Race 2 - Sonoma (Aggressive)": r'data\Sonoma\Race 2\sonoma_telemetry_R2.csv'
+            "Race 1 - Sonoma (Balanced)": r'data\Sonoma\Race 1\sonoma.csv',
+           
         }
         
         selected_race = st.sidebar.selectbox("SELECT RACE DATA", list(race_options.keys()))
