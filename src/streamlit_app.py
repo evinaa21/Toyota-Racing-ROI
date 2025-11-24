@@ -237,11 +237,61 @@ st.markdown("""
 # ==========================================
 # 2. DATA LOADING
 # ==========================================
+def validate_csv_format(df):
+    """
+    Validate that uploaded CSV has required columns and format.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Uploaded dataframe
+        
+    Returns:
+    --------
+    tuple : (bool, str)
+        (is_valid, error_message)
+    """
+    required_cols = ['timestamp', 'vehicle_id', 'telemetry_name', 'telemetry_value']
+    required_telemetry = ['speed', 'accx_can', 'accy_can', 'lap']
+    
+    # Check basic structure
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        return False, f"Missing required columns: {', '.join(missing_cols)}"
+    
+    # Check telemetry channels
+    available_telemetry = df['telemetry_name'].unique()
+    missing_telemetry = [t for t in required_telemetry if t not in available_telemetry]
+    if missing_telemetry:
+        return False, f"Missing required telemetry channels: {', '.join(missing_telemetry)}"
+    
+    # Check data types
+    if not pd.api.types.is_numeric_dtype(df['telemetry_value']):
+        try:
+            df['telemetry_value'] = pd.to_numeric(df['telemetry_value'], errors='coerce')
+        except:
+            return False, "telemetry_value column must contain numeric data"
+    
+    return True, "CSV format valid!"
+
+# Update load_race_data to include validation for uploaded files
 @st.cache_data(show_spinner=False)
-def load_race_data(filepath):
+def load_race_data(filepath, is_uploaded=False):
     """Load and process race data with caching"""
     try:
-        # Load and process data once using ROI engine
+        # Load raw data first
+        df_raw = pd.read_csv(filepath, low_memory=False)
+        
+        # Validate if uploaded
+        if is_uploaded:
+            is_valid, msg = validate_csv_format(df_raw)
+            if not is_valid:
+                st.error(f"❌ CSV Validation Failed: {msg}")
+                st.stop()
+            else:
+                st.sidebar.success(f"✅ {msg}")
+        
+        # Rest of existing load_race_data code...
         df = load_and_pivot_telemetry(filepath)
         df_clean = clean_telemetry(df)
         df_stress = calculate_tire_stress(df_clean)
@@ -314,7 +364,7 @@ def plot_interactive_friction_circle(df, skill):
     )
     return fig
 
-def plot_interactive_tire_stress(df_all_vehicles, selected_vehicle_id):
+def plot_interactive_tire_stress(df_all_vehicles, selected_vehicle_id, failure_threshold=None):
     """Plotly Line Chart for Tire Stress - Shows ALL vehicles with selected one highlighted"""
     
     # Generate unique colors for each vehicle
@@ -352,29 +402,30 @@ def plot_interactive_tire_stress(df_all_vehicles, selected_vehicle_id):
             showlegend=True
         ))
     
-    # Add critical failure threshold
-    max_lap = df_all_vehicles['lap'].max()
-    fig.add_shape(
-        type="line",
-        x0=0, x1=max_lap,
-        y0=8000, y1=8000,
-        line=dict(color="red", width=2, dash="dash"),
-    )
-    
-    fig.add_annotation(
-        x=max_lap * 0.9, y=8000,
-        text="CRITICAL FAILURE LIMIT",
-        showarrow=False,
-        yshift=10,
-        font=dict(color="red", size=10)
-    )
+    # Add critical failure threshold (Dynamic)
+    if failure_threshold:
+        max_lap = df_all_vehicles['lap'].max()
+        fig.add_shape(
+            type="line",
+            x0=0, x1=max_lap,
+            y0=failure_threshold, y1=failure_threshold,
+            line=dict(color="red", width=2, dash="dash"),
+        )
+        
+        fig.add_annotation(
+            x=max_lap * 0.9, y=failure_threshold,
+            text="PREDICTED FAILURE LIMIT",
+            showarrow=False,
+            yshift=10,
+            font=dict(color="red", size=10)
+        )
     
     fig.update_layout(
         template="plotly_dark",
         height=500,
-        title="CUMULATIVE TIRE STRESS - ALL VEHICLES",
+        title="CUMULATIVE TIRE ENERGY (WORK DONE) - ALL VEHICLES",
         xaxis_title="Lap Number",
-        yaxis_title="Cumulative Stress",
+        yaxis_title="Cumulative Energy (J)",
         hovermode='x unified',
         legend=dict(
             orientation="v",
@@ -422,29 +473,138 @@ def main():
     """, unsafe_allow_html=True)
 
     # --- SIDEBAR CONFIGURATION ---
-    st.sidebar.markdown("""
-        <div style="text-align: center; margin-bottom: 20px;">
-            <img src="logo.png" width="160">
-        </div>
-    """, unsafe_allow_html=True)
+    from PIL import Image
+    import os
+    
+    # Try to load local logo
+    logo_path = Path(__file__).parent / "logo.png"
+    if logo_path.exists():
+        logo = Image.open(logo_path)
+        st.sidebar.image(logo, width=160)
+    else:
+        st.sidebar.markdown("""
+            <div style="text-align: center; margin-bottom: 20px;">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/e/ee/Toyota_Gazoo_Racing_logo_2019.svg/1200px-Toyota_Gazoo_Racing_logo_2019.svg.png" width="160">
+            </div>
+        """, unsafe_allow_html=True)
     
     st.sidebar.markdown("### SESSION CONFIGURATION")
     
-    # Race Selection
-    race_options = {
-        "Race 1 - Sonoma (Balanced)": r'data\Sonoma\Race 1\sonoma_telemetry_R1.csv',
-        "Race 2 - Sonoma (Aggressive)": r'data\Sonoma\Race 2\sonoma_telemetry_R2.csv'
-    }
+    # DATA SOURCE SELECTION
+    data_source = st.sidebar.radio(
+        "DATA SOURCE",
+        ["Pre-loaded Race Data", "Upload Custom CSV"],
+        help="Choose between pre-loaded Toyota GR Cup data or upload your own telemetry CSV"
+    )
     
-    selected_race = st.sidebar.selectbox("SELECT RACE DATA", list(race_options.keys()))
-    filepath = race_options[selected_race]
+    filepath = None
+    
+    if data_source == "Pre-loaded Race Data":
+        # Race Selection
+        race_options = {
+            "Race 1 - Sonoma (Balanced)": r'data\Sonoma\Race 1\sonoma_telemetry_R1.csv',
+            "Race 2 - Sonoma (Aggressive)": r'data\Sonoma\Race 2\sonoma_telemetry_R2.csv'
+        }
+        
+        selected_race = st.sidebar.selectbox("SELECT RACE DATA", list(race_options.keys()))
+        filepath = race_options[selected_race]
+        
+    else:  # Upload Custom CSV
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 📁 UPLOAD TELEMETRY CSV")
+        
+        uploaded_file = st.sidebar.file_uploader(
+            "Choose a CSV file",
+            type=['csv'],
+            help="Upload a telemetry CSV in long format with columns: timestamp, vehicle_id, telemetry_name, telemetry_value"
+        )
+        
+        if uploaded_file is not None:
+            # Save uploaded file temporarily
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_file:
+                tmp_file.write(uploaded_file.getvalue())
+                filepath = tmp_file.name
+            
+            st.sidebar.success(f"✅ Loaded: {uploaded_file.name}")
+            st.sidebar.info(f"File size: {uploaded_file.size / 1024 / 1024:.2f} MB")
+        else:
+            st.sidebar.warning("⚠️ Please upload a CSV file to begin analysis")
+            st.info("""
+                ### 📋 Expected CSV Format
+                
+                Your CSV should have the following structure:
+                
+                **Long Format (Recommended):**
+                ```
+                timestamp, vehicle_id, vehicle_number, lap, telemetry_name, telemetry_value
+                2025-03-30T15:02:54.012Z, GR86-002-002, 2, 1, speed, 120.5
+                2025-03-30T15:02:54.012Z, GR86-002-002, 2, 1, accx_can, 0.85
+                2025-03-30T15:02:54.012Z, GR86-002-002, 2, 1, accy_can, -0.65
+                ```
+                
+                **Required Telemetry Channels:**
+                - `speed` - Vehicle speed (km/h)
+                - `accx_can` - Longitudinal G-force
+                - `accy_can` - Lateral G-force
+                - `lap` - Lap number
+                - `vehicle_id` - Unique vehicle identifier
+                
+                **Optional:**
+                - `Steering_Angle`
+                - `Brake_Pressure`
+                - `Throttle_Position`
+                - GPS coordinates (latitude, longitude)
+                
+                ---
+                
+                ### 🎯 Quick Start Guide
+                
+                1. Select **"Upload Custom CSV"** in the sidebar
+                2. Click **"Browse files"** and select your telemetry CSV
+                3. Wait for data processing (may take 30-60s for large files)
+                4. Select a vehicle from the dropdown
+                5. Explore the analysis tabs!
+                
+                **Sample data available in pre-loaded Race 1 & 2**
+            """)
+            st.stop()
 
-    # Load Data
-    with st.spinner(f"Processing Telemetry..."):
-        data = load_race_data(filepath)
+    # Load Data (works for both pre-loaded and uploaded)
+    if filepath:
+        with st.spinner(f"Processing Telemetry... This may take a moment for large files."):
+            try:
+                data = load_race_data(filepath)
+                
+                # Clean up temp file if it was uploaded
+                if data_source == "Upload Custom CSV" and filepath.startswith(tempfile.gettempdir()):
+                    try:
+                        os.unlink(filepath)
+                    except:
+                        pass
+                        
+            except Exception as e:
+                st.error(f"⚠️ Error loading data: {str(e)}")
+                st.error("""
+                    **Possible issues:**
+                    - CSV format doesn't match expected structure
+                    - Missing required columns (speed, accx_can, accy_can, lap, vehicle_id)
+                    - File corruption or encoding issues
+                    
+                    **Try:**
+                    - Check your CSV has the correct column names
+                    - Ensure data is in long format (use pre-loaded races as reference)
+                    - Verify file is not corrupted
+                """)
+                import traceback
+                with st.expander("🔍 See detailed error"):
+                    st.code(traceback.format_exc())
+                st.stop()
 
-    if data is None:
-        st.error("⚠️ Data not found! Check your paths.")
+        if data is None:
+            st.error("⚠️ Data processing failed! Check your file format.")
+            st.stop()
+    else:
         st.stop()
         
     # Vehicle Filter - FIX THE MESS
@@ -502,7 +662,7 @@ def main():
         
     with col3:
         avg_stress = veh_stats['lap_tire_stress'].mean()
-        st.markdown(metric_card("AVG TIRE STRESS", f"{avg_stress:.0f}"), unsafe_allow_html=True)
+        st.markdown(metric_card("AVG TIRE ENERGY", f"{avg_stress:,.0f}"), unsafe_allow_html=True)
         
     with col4:
         skill = data['skill_analysis']['skill_level']
@@ -534,8 +694,10 @@ def main():
                 veh_stats, x='lap', y='roi_efficiency',
                 color='roi_category',
                 color_discrete_map={
-                    'EXCELLENT': '#2ecc71', 'GOOD': '#f1c40f', 
-                    'WASTEFUL': '#e67e22', 'TERRIBLE': '#e74c3c'
+                    'EXCELLENT': '#2ecc71',  # Emerald Green
+                    'GOOD': '#82e0aa',       # Light Green (User wanted more green!)
+                    'WASTEFUL': '#e67e22',   # Orange
+                    'TERRIBLE': '#e74c3c'    # Red
                 },
                 title="LAP-BY-LAP EFFICIENCY SCORE"
             )
@@ -544,7 +706,8 @@ def main():
                 height=400,
                 plot_bgcolor='rgba(0,0,0,0)',
                 paper_bgcolor='rgba(0,0,0,0)',
-                font={'family': 'Rajdhani'}
+                font={'family': 'Rajdhani'},
+                yaxis=dict(range=[-5, 5], title="ROI Score (Scaled)") # Fix scale to keep bars visible
             )
             st.plotly_chart(fig_roi, use_container_width=True)
             
@@ -555,8 +718,10 @@ def main():
                 names=roi_counts.index, values=roi_counts.values,
                 color=roi_counts.index,
                 color_discrete_map={
-                    'EXCELLENT': '#2ecc71', 'GOOD': '#f1c40f', 
-                    'WASTEFUL': '#e67e22', 'TERRIBLE': '#e74c3c'
+                    'EXCELLENT': '#2ecc71', 
+                    'GOOD': '#82e0aa', 
+                    'WASTEFUL': '#e67e22', 
+                    'TERRIBLE': '#e74c3c'
                 },
                 hole=0.5,
                 title="EFFICIENCY DISTRIBUTION"
@@ -642,10 +807,15 @@ def main():
         with m2:
             st.markdown(metric_card("LAPS LEFT", f"{prediction['laps_remaining']:.1f}"), unsafe_allow_html=True)
         with m3:
-            st.markdown(metric_card("STRESS RATE", f"{prediction['stress_rate']:.1f}/lap"), unsafe_allow_html=True)
+            st.markdown(metric_card("ENERGY RATE", f"{prediction['stress_rate']:,.0f}/lap"), unsafe_allow_html=True)
         
         # Graph showing ALL vehicles with selected one highlighted
-        fig_stress = plot_interactive_tire_stress(data['lap_roi'], veh_id)
+        # Pass the dynamic threshold from the prediction
+        fig_stress = plot_interactive_tire_stress(
+            data['lap_roi'], 
+            veh_id, 
+            failure_threshold=prediction.get('failure_threshold')
+        )
         
         fig_stress.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',

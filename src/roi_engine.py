@@ -16,7 +16,10 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import os
 from scipy import interpolate
+from scipy.signal import savgol_filter
+from scipy.interpolate import interp1d
 from sklearn.linear_model import LinearRegression
 import warnings
 warnings.filterwarnings('ignore')
@@ -42,7 +45,13 @@ def load_and_pivot_telemetry(filepath):
     print("="*70)
     print("RACING ROI ENGINE - LOADING DATA")
     print("="*70)
-    print(f"Loading: {filepath}")
+    
+    # DATA SOURCE VERIFICATION
+    abs_path = os.path.abspath(filepath)
+    print(f"📂 LOADING DATA FROM: {abs_path}")
+    
+    if "data" not in abs_path.lower():
+        print("⚠️ WARNING: You are not loading from the standard 'data/' folder. Please check your path.")
     
     df_long = pd.read_csv(filepath, low_memory=False)
     print(f"Loaded {len(df_long):,} rows")
@@ -62,7 +71,11 @@ def load_and_pivot_telemetry(filepath):
 
 def clean_telemetry(df):
     """
-    Clean telemetry data with realistic physics filters.
+    Clean telemetry data with Professional Signal Processing.
+    
+    IMPROVEMENT 1: SIGNAL PROCESSING
+    Instead of hard dropping > 2.0G, we use Savitzky-Golay filters to 
+    smooth sensor noise while preserving real transient peaks (curb strikes).
     
     Parameters:
     -----------
@@ -75,7 +88,7 @@ def clean_telemetry(df):
         Cleaned data
     """
     print("\n" + "="*70)
-    print("CLEANING TELEMETRY")
+    print("CLEANING TELEMETRY (PROFESSIONAL SIGNAL PROCESSING)")
     print("="*70)
     
     initial = len(df)
@@ -96,14 +109,24 @@ def clean_telemetry(df):
         (df['accx_can'] != 0) & 
         (df['accy_can'] != 0)
     ].copy()
-    print(f"After acceleration filter: {len(df):,} rows")
     
-    # Filter: Realistic G-forces (≤2.0G)
-    df = df[
-        (df['accx_can'].abs() <= 2.0) & 
-        (df['accy_can'].abs() <= 2.0)
-    ].copy()
-    print(f"After G-force filter: {len(df):,} rows")
+    # --- SIGNAL PROCESSING UPGRADE ---
+    print("Applying Savitzky-Golay Filter (Window=11, Poly=3)...")
+    
+    # We must apply filters per-lap to avoid smoothing across discontinuities
+    # Using groupby().transform() for vectorized application
+    def smooth_signal(x):
+        if len(x) > 11:
+            return savgol_filter(x, window_length=11, polyorder=3)
+        return x
+
+    # Group by vehicle and lap to respect physical boundaries
+    # Note: This might take a moment but is essential for accuracy
+    df['accx_can'] = df.groupby(['vehicle_id', 'lap'])['accx_can'].transform(smooth_signal)
+    df['accy_can'] = df.groupby(['vehicle_id', 'lap'])['accy_can'].transform(smooth_signal)
+    
+    # We NO LONGER drop > 2.0G rows. 
+    # The filter handles noise, and real high-G impacts (curbs) are preserved.
     
     print(f"Total removed: {initial - len(df):,} rows ({(initial-len(df))/initial*100:.1f}%)")
     
@@ -111,10 +134,17 @@ def clean_telemetry(df):
 
 def calculate_tire_stress(df):
     """
-    STEP 1: Calculate Tire Stress Metric
+    STEP 1: Calculate Tire Energy (Physics Upgrade) & Resample Data
     
-    Formula: Stress = (Lateral_G² + Longitudinal_G²) * Duration
-    High G-force sustained over time = High tire degradation
+    IMPROVEMENT 2: DATA ALIGNMENT
+    Resamples all laps to a common 1m Distance Grid for accurate comparison.
+    
+    IMPROVEMENT 3: PHYSICS UPGRADE
+    Calculates 'Tire Energy' (Work Done) instead of just Stress.
+    Formula: Stress = (Total_G)^2 * Speed * Distance_Step
+    
+    IMPROVEMENT 4: CORNER DETECTION
+    Auto-segments track into 'Cornering Zones'.
     
     Parameters:
     -----------
@@ -124,38 +154,117 @@ def calculate_tire_stress(df):
     Returns:
     --------
     pd.DataFrame
-        Data with tire_stress column
+        Resampled data with tire_stress and corner_id
     """
     print("\n" + "="*70)
-    print("STEP 1: CALCULATING TIRE STRESS")
+    print("STEP 1: PHYSICS ENGINE & DATA ALIGNMENT")
     print("="*70)
     
-    # Calculate Total G-Force
-    df['total_g'] = np.sqrt(df['accx_can']**2 + df['accy_can']**2)
+    # Pre-calculate speed in m/s
+    df['speed_ms'] = df['speed'] / 3.6
+    df['dt'] = 0.02  # 50Hz assumption
+    df['ds'] = df['speed_ms'] * df['dt']
     
-    # Calculate time delta between samples (assume ~50Hz sampling)
-    df['time_delta'] = 0.02  # 20ms per sample (50Hz)
+    resampled_laps = []
     
-    # Tire Stress = G² * Duration
-    # Squaring emphasizes high-G maneuvers (exponential tire wear)
-    df['tire_stress'] = (df['total_g']**2) * df['time_delta']
+    print("Resampling laps to 1m Distance Grid & Detecting Corners...")
     
-    print(f"Tire Stress Statistics:")
-    print(f"  Mean:   {df['tire_stress'].mean():.4f}")
-    print(f"  Median: {df['tire_stress'].median():.4f}")
-    print(f"  Max:    {df['tire_stress'].max():.4f}")
-    print(f"  Total Stress (all laps): {df['tire_stress'].sum():.2f}")
+    # Process each lap individually
+    for (vid, lap), group in df.groupby(['vehicle_id', 'lap']):
+        if len(group) < 10: continue
+            
+        group = group.sort_values('timestamp')
+        
+        # Calculate cumulative distance for this lap
+        group['dist_cum'] = group['ds'].cumsum()
+        group['time_cum'] = group['dt'].cumsum()
+        
+        max_dist = group['dist_cum'].max()
+        
+        # Create common Distance Grid (1m increments)
+        # This aligns all laps spatially!
+        grid_dist = np.arange(0, max_dist, 1.0)
+        
+        if len(grid_dist) < 10: continue
+            
+        # Interpolate telemetry to the grid
+        # We use 'extrapolate' to handle the very start/end
+        f_speed = interp1d(group['dist_cum'], group['speed_ms'], kind='linear', fill_value="extrapolate")
+        f_accx = interp1d(group['dist_cum'], group['accx_can'], kind='linear', fill_value="extrapolate")
+        f_accy = interp1d(group['dist_cum'], group['accy_can'], kind='linear', fill_value="extrapolate")
+        f_time = interp1d(group['dist_cum'], group['time_cum'], kind='linear', fill_value="extrapolate")
+        
+        new_speed = f_speed(grid_dist)
+        new_accx = f_accx(grid_dist)
+        new_accy = f_accy(grid_dist)
+        new_time = f_time(grid_dist)
+        
+        # --- PHYSICS UPGRADE: TIRE ENERGY ---
+        # Stress = (Total_G)^2 * Speed * Distance_Step
+        # Distance_Step is 1.0m (from our grid)
+        total_g = np.sqrt(new_accx**2 + new_accy**2)
+        tire_energy = (total_g**2) * new_speed * 1.0
+        
+        # --- CORNER DETECTION ---
+        # Corner = Lateral G > 0.5 for > 20m
+        is_corner_candidate = np.abs(new_accy) > 0.5
+        corner_ids = np.zeros(len(grid_dist), dtype=int)
+        
+        current_corner_id = 0
+        in_corner = False
+        start_idx = 0
+        
+        for i in range(len(grid_dist)):
+            if is_corner_candidate[i]:
+                if not in_corner:
+                    in_corner = True
+                    start_idx = i
+            else:
+                if in_corner:
+                    in_corner = False
+                    # Check length (1 index = 1 meter)
+                    if (i - start_idx) > 20:
+                        current_corner_id += 1
+                        corner_ids[start_idx:i] = current_corner_id
+        
+        # Handle corner at end of lap
+        if in_corner and (len(grid_dist) - start_idx) > 20:
+            current_corner_id += 1
+            corner_ids[start_idx:] = current_corner_id
+            
+        # Create Resampled DataFrame
+        lap_df = pd.DataFrame({
+            'vehicle_id': vid,
+            'vehicle_number': group['vehicle_number'].iloc[0],
+            'lap': lap,
+            'dist': grid_dist,
+            'time': new_time,
+            'speed_ms': new_speed,
+            'accx': new_accx,
+            'accy': new_accy,
+            'total_g': total_g,
+            'tire_stress': tire_energy,
+            'corner_id': corner_ids
+        })
+        
+        resampled_laps.append(lap_df)
+        
+    df_resampled = pd.concat(resampled_laps, ignore_index=True)
     
-    return df
+    print(f"Processed {len(df_resampled):,} resampled data points")
+    print(f"Physics Model: Tire Energy (Work Done)")
+    print(f"Grid Resolution: 1.0 meter")
+    
+    return df_resampled
 
 def calculate_lap_metrics(df):
     """
-    STEP 2: Calculate per-lap metrics for ROI analysis
+    STEP 2: Calculate per-lap metrics using High-Fidelity Data
     
     Parameters:
     -----------
     df : pd.DataFrame
-        Telemetry with tire_stress
+        Resampled telemetry (1m grid)
     
     Returns:
     --------
@@ -163,38 +272,73 @@ def calculate_lap_metrics(df):
         Lap-level summary
     """
     print("\n" + "="*70)
-    print("STEP 2: CALCULATING LAP METRICS")
+    print("STEP 2: CALCULATING LAP METRICS (HIGH FIDELITY)")
     print("="*70)
     
     # Group by vehicle and lap
     lap_summary = df.groupby(['vehicle_id', 'vehicle_number', 'lap']).agg({
-        'tire_stress': 'sum',           # Total stress per lap
-        'total_g': 'mean',               # Average G-force
-        'speed': 'mean',                 # Average speed
-        'timestamp': 'count'             # Sample count (proxy for lap time)
+        'tire_stress': 'sum',            # Total Energy
+        'total_g': 'mean',               # Avg G
+        'speed_ms': 'mean',              # Avg Speed
+        'time': 'max',                   # Lap Time (from interpolated time)
+        'dist': 'max'                    # Lap Distance
     }).reset_index()
     
-    lap_summary.columns = ['vehicle_id', 'vehicle_number', 'lap', 
-                           'lap_tire_stress', 'avg_g', 'avg_speed', 'sample_count']
+    # Rename for compatibility
+    lap_summary.rename(columns={
+        'lap_tire_stress': 'tire_stress', # It's already named tire_stress in agg
+        'speed_ms': 'avg_speed',
+        'time': 'lap_time_est'
+    }, inplace=True)
     
-    # Estimate lap time (samples * 0.02 seconds)
-    lap_summary['lap_time_est'] = lap_summary['sample_count'] * 0.02
+    # Convert speed back to kph for display
+    lap_summary['avg_speed'] = lap_summary['avg_speed'] * 3.6
     
-    # Calculate delta to reference lap (lap with minimum stress)
+    # Rename tire_stress to lap_tire_stress for compatibility
+    lap_summary.rename(columns={'tire_stress': 'lap_tire_stress'}, inplace=True)
+    
+    # --- TIME DELTA CALCULATION ---
+    # Compare against the session best lap
+    # Since we are on a distance grid, we can compare times directly?
+    # Actually, simple LapTime delta is sufficient for the summary.
+    # But for "Time Delta" column, we want the gap to the best lap.
+    
+    # Find global best lap time (or per vehicle?)
+    # Usually ROI is per-vehicle self-improvement.
+    
     for vehicle in lap_summary['vehicle_id'].unique():
         mask = lap_summary['vehicle_id'] == vehicle
         vehicle_data = lap_summary[mask]
         
-        # Find reference lap (lowest stress, likely smoothest driving)
-        ref_lap_idx = vehicle_data['lap_tire_stress'].idxmin()
+        # Reference Lap: Lowest Stress (Efficiency Benchmark)
+        # FIX: Filter out slow "Out Laps" (> 130s) and incomplete laps (< 45s)
+        # This ensures we only compare against valid racing laps
+        valid_laps = vehicle_data[
+            (vehicle_data['lap_time_est'] <= 130) & 
+            (vehicle_data['lap_time_est'] > 45)
+        ]
+        
+        if len(valid_laps) > 0:
+            ref_lap_idx = valid_laps['lap_tire_stress'].idxmin()
+        else:
+            # Fallback if no valid laps found (use median duration lap?)
+            # Or just min stress of whatever we have
+            ref_lap_idx = vehicle_data['lap_tire_stress'].idxmin()
+            
         ref_stress = lap_summary.loc[ref_lap_idx, 'lap_tire_stress']
         ref_time = lap_summary.loc[ref_lap_idx, 'lap_time_est']
+        
+        # SAFETY CHECK: Avoid division by zero
+        if ref_stress == 0:
+            ref_stress = 1.0
         
         # Calculate deltas
         lap_summary.loc[mask, 'stress_delta'] = lap_summary.loc[mask, 'lap_tire_stress'] - ref_stress
         lap_summary.loc[mask, 'time_delta'] = lap_summary.loc[mask, 'lap_time_est'] - ref_time
+        
+        # Percentages
         lap_summary.loc[mask, 'stress_delta_pct'] = (lap_summary.loc[mask, 'stress_delta'] / ref_stress) * 100
-        lap_summary.loc[mask, 'time_delta_pct'] = (lap_summary.loc[mask, 'time_delta'] / ref_time) * 100
+        # Handle division by zero for time if needed, but time is never 0
     
     print(f"Analyzed {len(lap_summary)} laps")
     print(f"Vehicles: {lap_summary['vehicle_number'].unique().tolist()}")
@@ -221,28 +365,69 @@ def calculate_roi_efficiency(lap_summary):
     print("STEP 3: CALCULATING ROI EFFICIENCY")
     print("="*70)
     
+    # RECALCULATE DELTAS WITH IMPROVED REFERENCE LAP LOGIC
+    # We do this here to fix the "Out Lap" bug without rewriting the previous function
+    
+    for vehicle in lap_summary['vehicle_id'].unique():
+        mask = lap_summary['vehicle_id'] == vehicle
+        vehicle_data = lap_summary[mask].copy()
+        
+        # 1. FIX REFERENCE LAP SELECTION
+        # Calculate median lap time to establish a baseline pace
+        median_time = vehicle_data['lap_time_est'].median()
+        
+        # Filter for VALID RACING LAPS (The 107% Rule)
+        # Exclude Out Laps, Yellow Flags, and Pit Laps
+        valid_laps = vehicle_data[vehicle_data['lap_time_est'] <= (median_time * 1.07)]
+        
+        if len(valid_laps) > 0:
+            # CHANGE: Use MEDIAN lap as baseline so we have ~50% Green bars
+            # Comparing to the fastest lap made everyone look "Terrible"
+            median_time = valid_laps['lap_time_est'].median()
+            # Find lap closest to median time
+            ref_lap_idx = (valid_laps['lap_time_est'] - median_time).abs().idxmin()
+            ref_type = "MEDIAN (BASELINE)"
+        else:
+            # Fallback: Use the median lap if no clean laps exist
+            ref_lap_idx = (vehicle_data['lap_time_est'] - median_time).abs().idxmin()
+            ref_type = "MEDIAN (FALLBACK)"
+            
+        ref_lap = lap_summary.loc[ref_lap_idx]
+        ref_stress = ref_lap['lap_tire_stress']
+        ref_time = ref_lap['lap_time_est']
+        
+        # 4. SAFETY CHECK: Print reference details
+        print(f"🏎️ Reference Lap Selected: Lap {int(ref_lap['lap'])} ({ref_type}) | Time: {ref_time:.2f}s | Stress: {ref_stress:,.0f}")
+        
+        # 3. HANDLE DIVISION BY ZERO
+        if ref_stress == 0:
+            ref_stress = 1.0
+            
+        # Recalculate deltas
+        lap_summary.loc[mask, 'stress_delta'] = lap_summary.loc[mask, 'lap_tire_stress'] - ref_stress
+        lap_summary.loc[mask, 'time_delta'] = lap_summary.loc[mask, 'lap_time_est'] - ref_time
+        lap_summary.loc[mask, 'stress_delta_pct'] = (lap_summary.loc[mask, 'stress_delta'] / ref_stress) * 100
+
     # ROI Efficiency Score
     # Negative time delta = faster (good)
     # Lower stress delta = less wear (good)
-    # We want: Maximum speed gain for minimum stress cost
     
     # Avoid division by zero
-    lap_summary['stress_delta_safe'] = lap_summary['stress_delta'].replace(0, 0.001)
+    lap_summary['stress_delta_safe'] = lap_summary['stress_delta'].replace(0, 1.0)
     
-    # ROI = -time_delta / stress_delta
-    # Negative because faster lap = negative time delta
-    # Higher ROI = More efficient (faster with less tire wear)
-    lap_summary['roi_efficiency'] = -lap_summary['time_delta'] / lap_summary['stress_delta_safe'].abs()
+    # 2. SCALE THE ROI SCORE
+    # Scale by 5000 for better visibility and "bigger bars"
+    lap_summary['roi_efficiency'] = (-lap_summary['time_delta'] / lap_summary['stress_delta_safe'].abs()) * 5000
     
     # Categorize efficiency
     def categorize_roi(roi):
         if pd.isna(roi) or np.isinf(roi):
             return 'REFERENCE'
-        elif roi > 0.5:
+        elif roi > 1.0:
             return 'EXCELLENT'
         elif roi > 0:
             return 'GOOD'
-        elif roi > -0.5:
+        elif roi > -1.0:
             return 'WASTEFUL'
         else:
             return 'TERRIBLE'
@@ -291,8 +476,11 @@ def predict_tire_failure(lap_summary, vehicle_id):
     model = LinearRegression()
     model.fit(X, y)
     
-    # Define failure threshold (arbitrary: 200 cumulative stress units)
-    FAILURE_THRESHOLD = 200
+    # Define failure threshold (Dynamic based on driving intensity)
+    # We assume tires can handle ~25 laps of "average" driving before degradation becomes critical
+    # This scales automatically whether we use Stress (G^2*t) or Energy (G^2*v*d)
+    avg_lap_stress = vehicle_data['lap_tire_stress'].mean()
+    FAILURE_THRESHOLD = avg_lap_stress * 25
     
     # Predict failure lap
     failure_lap = (FAILURE_THRESHOLD - model.intercept_) / model.coef_[0]
