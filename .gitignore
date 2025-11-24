@@ -180,11 +180,7 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# Ignore Data Files
-data/
-*.csv
-*.zip
-*.xlsx
+
 
 # macOS
 .DS_Store
