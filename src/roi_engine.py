@@ -233,6 +233,18 @@ def clean_telemetry(df):
         (df['accx_can'] != 0) & 
         (df['accy_can'] != 0)
     ].copy()
+
+    # --- FIX: AUTO-DETECT UNITS (m/s^2 vs G) ---
+    # If the 95th percentile of acceleration is > 4.0, it's likely m/s^2 (since 1G = 9.8m/s^2)
+    # A race car rarely pulls sustained > 4G.
+    acc_mag = (df['accx_can']**2 + df['accy_can']**2)**0.5
+    p95 = acc_mag.quantile(0.95)
+    
+    if p95 > 4.0:
+        print(f"⚠️ DETECTED HIGH ACCELERATION VALUES (P95={p95:.2f}). Assuming m/s^2 units.")
+        print("🔄 Converting to G-force (dividing by 9.81)...")
+        df['accx_can'] = df['accx_can'] / 9.81
+        df['accy_can'] = df['accy_can'] / 9.81
     
     # --- SIGNAL PROCESSING UPGRADE ---
     print("Applying Savitzky-Golay Filter (Window=11, Poly=3)...")
@@ -249,8 +261,16 @@ def clean_telemetry(df):
     df['accx_can'] = df.groupby(['vehicle_id', 'lap'])['accx_can'].transform(smooth_signal)
     df['accy_can'] = df.groupby(['vehicle_id', 'lap'])['accy_can'].transform(smooth_signal)
     
-    # We NO LONGER drop > 2.0G rows. 
-    # The filter handles noise, and real high-G impacts (curbs) are preserved.
+    # --- FIX: RE-INTRODUCE SANITY CLIP ---
+    # Even with smoothing, crazy outliers (>3G) ruin the plots.
+    # Real GR86 Cup cars peak around 1.6-1.8G. 3.0G is a safe "impossible" limit.
+    initial_len = len(df)
+    df = df[
+        (df['accx_can'].abs() <= 3.0) & 
+        (df['accy_can'].abs() <= 3.0)
+    ]
+    if len(df) < initial_len:
+        print(f"✂️ Clipped {initial_len - len(df)} outlier rows (> 3.0 G)")
     
     print(f"Total removed: {initial - len(df):,} rows ({(initial-len(df))/initial*100:.1f}%)")
     
