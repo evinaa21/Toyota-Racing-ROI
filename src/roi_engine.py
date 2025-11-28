@@ -70,7 +70,8 @@ def load_and_pivot_telemetry(filepath):
     
     # --- MEMORY OPTIMIZATION: Read in CHUNKS ---
     # We only need these columns for the analysis
-    usecols = ['timestamp', 'vehicle_id', 'vehicle_number', 'lap', 'outing', 'telemetry_name', 'telemetry_value']
+    # FIX: Add common time column variants
+    usecols = ['timestamp', 'time', 'Time', 'SessionTime', 'vehicle_id', 'vehicle_number', 'lap', 'outing', 'telemetry_name', 'telemetry_value']
     
     # Check if file is huge (>500MB)
     file_size = os.path.getsize(filepath)
@@ -146,6 +147,22 @@ def load_and_pivot_telemetry(filepath):
         )
     
     # --- FIX: Handle missing metadata columns ---
+    # 1. Normalize Timestamp
+    time_variants = ['time', 'Time', 'SessionTime']
+    if 'timestamp' not in df_long.columns:
+        found_time = False
+        for variant in time_variants:
+            if variant in df_long.columns:
+                print(f"⚠️ Renaming '{variant}' to 'timestamp'")
+                df_long.rename(columns={variant: 'timestamp'}, inplace=True)
+                found_time = True
+                break
+        
+        if not found_time:
+            print("⚠️ No timestamp column found! Generating synthetic timestamp.")
+            df_long['timestamp'] = df_long.index * 0.1  # Assume 10Hz if missing
+
+    # 2. Fill other missing metadata
     # Some custom files might miss 'outing', 'vehicle_id', etc.
     defaults = {
         'outing': 1,
