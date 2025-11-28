@@ -145,6 +145,20 @@ def load_and_pivot_telemetry(filepath):
             f"Found: {df_long.columns.tolist()}"
         )
     
+    # --- FIX: Handle missing metadata columns ---
+    # Some custom files might miss 'outing', 'vehicle_id', etc.
+    defaults = {
+        'outing': 1,
+        'vehicle_id': 'Unknown',
+        'vehicle_number': '00',
+        'lap': 0
+    }
+    
+    for col, default_val in defaults.items():
+        if col not in df_long.columns:
+            print(f"⚠️ Missing column '{col}'. Filling with default: {default_val}")
+            df_long[col] = default_val
+    
     # Pivot to wide format
     print("Pivoting to wide format...")
     df_wide = df_long.pivot_table(
